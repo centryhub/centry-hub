@@ -1,0 +1,109 @@
+local player = game.Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoid = character:WaitForChild("Humanoid")
+local root = character:WaitForChild("HumanoidRootPart")
+local camera = workspace.CurrentCamera
+local runService = game:GetService("RunService")
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Parent = player:WaitForChild("PlayerGui")
+
+local frame = Instance.new("Frame")
+frame.Parent = screenGui
+frame.Size = UDim2.new(0, 189, 0, 280)
+frame.Position = UDim2.new(0.774, 0, 0.243, 0)
+frame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+frame.BorderSizePixel = 0
+
+local frameCorner = Instance.new("UICorner")
+frameCorner.CornerRadius = UDim.new(0, 20)
+frameCorner.Parent = frame
+
+local flyButton = Instance.new("TextButton")
+flyButton.Parent = frame
+flyButton.Size = UDim2.new(0, 134, 0, 45)
+flyButton.Position = UDim2.new(0, 27, 0, 40)
+flyButton.Text = "FLY OFF"
+flyButton.BackgroundColor3 = Color3.fromRGB(0, 200, 0)
+flyButton.TextColor3 = Color3.fromRGB(255,255,255)
+flyButton.TextScaled = true
+
+local flyCorner = Instance.new("UICorner")
+flyCorner.CornerRadius = UDim.new(0, 15)
+flyCorner.Parent = flyButton
+
+local jumpButton = Instance.new("TextButton")
+jumpButton.Parent = frame
+jumpButton.Size = UDim2.new(0, 134, 0, 45)
+jumpButton.Position = UDim2.new(0, 27, 0, 110)
+jumpButton.Text = "HIGH JUMP OFF"
+jumpButton.BackgroundColor3 = Color3.fromRGB(0, 200, 0)
+jumpButton.TextColor3 = Color3.fromRGB(255,255,255)
+jumpButton.TextScaled = true
+
+local jumpCorner = Instance.new("UICorner")
+jumpCorner.CornerRadius = UDim.new(0, 15)
+jumpCorner.Parent = jumpButton
+
+local flying = false
+local highJump = false
+local normalJumpPower = humanoid.JumpPower
+local speed = 80
+
+local bodyVelocity
+local bodyGyro
+local connection
+
+local function startFlying()
+	bodyVelocity = Instance.new("BodyVelocity")
+	bodyVelocity.MaxForce = Vector3.new(1e9,1e9,1e9)
+	bodyVelocity.Parent = root
+
+	bodyGyro = Instance.new("BodyGyro")
+	bodyGyro.MaxTorque = Vector3.new(1e9,1e9,1e9)
+	bodyGyro.Parent = root
+
+	humanoid.PlatformStand = true
+
+	connection = runService.RenderStepped:Connect(function()
+		if flying then
+			local moveDir = humanoid.MoveDirection
+			if moveDir.Magnitude > 0 then
+				local worldMove = camera.CFrame:VectorToWorldSpace(moveDir)
+				bodyVelocity.Velocity = worldMove.Unit * speed
+			else
+				bodyVelocity.Velocity = Vector3.new(0,0,0)
+			end
+			bodyGyro.CFrame = camera.CFrame
+		end
+	end)
+end
+
+local function stopFlying()
+	if connection then connection:Disconnect() end
+	if bodyVelocity then bodyVelocity:Destroy() end
+	if bodyGyro then bodyGyro:Destroy() end
+	humanoid.PlatformStand = false
+end
+
+flyButton.MouseButton1Click:Connect(function()
+	flying = not flying
+	if flying then
+		flyButton.Text = "FLY ON"
+		startFlying()
+	else
+		flyButton.Text = "FLY OFF"
+		stopFlying()
+	end
+end)
+
+jumpButton.MouseButton1Click:Connect(function()
+	highJump = not highJump
+	if highJump then
+		jumpButton.Text = "HIGH JUMP ON"
+		humanoid.JumpPower = normalJumpPower * 2
+	else
+		jumpButton.Text = "HIGH JUMP OFF"
+		humanoid.JumpPower = normalJumpPower
+	end
+end)
