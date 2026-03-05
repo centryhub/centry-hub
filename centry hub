@@ -1,109 +1,435 @@
-local player = game.Players.LocalPlayer
-local character = player.Character or player.CharacterAdded:Wait()
-local humanoid = character:WaitForChild("Humanoid")
-local root = character:WaitForChild("HumanoidRootPart")
-local camera = workspace.CurrentCamera
-local runService = game:GetService("RunService")
+-- CENTRY HUB
 
-local screenGui = Instance.new("ScreenGui")
-screenGui.Parent = player:WaitForChild("PlayerGui")
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local UIS = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
 
-local frame = Instance.new("Frame")
-frame.Parent = screenGui
-frame.Size = UDim2.new(0, 189, 0, 280)
-frame.Position = UDim2.new(0.774, 0, 0.243, 0)
-frame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-frame.BorderSizePixel = 0
+local player = Players.LocalPlayer
+local guiParent = player:WaitForChild("PlayerGui")
 
-local frameCorner = Instance.new("UICorner")
-frameCorner.CornerRadius = UDim.new(0, 20)
-frameCorner.Parent = frame
+--------------------------------------------------
+-- LOADING SCREEN
+--------------------------------------------------
 
-local flyButton = Instance.new("TextButton")
-flyButton.Parent = frame
-flyButton.Size = UDim2.new(0, 134, 0, 45)
-flyButton.Position = UDim2.new(0, 27, 0, 40)
-flyButton.Text = "FLY OFF"
-flyButton.BackgroundColor3 = Color3.fromRGB(0, 200, 0)
-flyButton.TextColor3 = Color3.fromRGB(255,255,255)
-flyButton.TextScaled = true
+local loading = Instance.new("ScreenGui",guiParent)
 
-local flyCorner = Instance.new("UICorner")
-flyCorner.CornerRadius = UDim.new(0, 15)
-flyCorner.Parent = flyButton
+local bg = Instance.new("Frame",loading)
+bg.Size = UDim2.new(1,0,1,0)
+bg.BackgroundColor3 = Color3.new(0,0,0)
 
-local jumpButton = Instance.new("TextButton")
-jumpButton.Parent = frame
-jumpButton.Size = UDim2.new(0, 134, 0, 45)
-jumpButton.Position = UDim2.new(0, 27, 0, 110)
-jumpButton.Text = "HIGH JUMP OFF"
-jumpButton.BackgroundColor3 = Color3.fromRGB(0, 200, 0)
-jumpButton.TextColor3 = Color3.fromRGB(255,255,255)
-jumpButton.TextScaled = true
+local text = Instance.new("TextLabel",bg)
+text.Size = UDim2.new(1,0,0,100)
+text.Position = UDim2.new(0,0,0.45,0)
+text.BackgroundTransparency = 1
+text.Text = "Welcome back "..player.Name
+text.TextScaled = true
+text.Font = Enum.Font.GothamBold
+text.TextColor3 = Color3.new(1,1,1)
 
-local jumpCorner = Instance.new("UICorner")
-jumpCorner.CornerRadius = UDim.new(0, 15)
-jumpCorner.Parent = jumpButton
+task.wait(2)
 
-local flying = false
-local highJump = false
-local normalJumpPower = humanoid.JumpPower
-local speed = 80
+TweenService:Create(bg,TweenInfo.new(1.2),{BackgroundTransparency=1}):Play()
+TweenService:Create(text,TweenInfo.new(1.2),{TextTransparency=1}):Play()
 
-local bodyVelocity
-local bodyGyro
-local connection
+task.wait(1.2)
+loading:Destroy()
 
-local function startFlying()
-	bodyVelocity = Instance.new("BodyVelocity")
-	bodyVelocity.MaxForce = Vector3.new(1e9,1e9,1e9)
-	bodyVelocity.Parent = root
+--------------------------------------------------
+-- GUI
+--------------------------------------------------
 
-	bodyGyro = Instance.new("BodyGyro")
-	bodyGyro.MaxTorque = Vector3.new(1e9,1e9,1e9)
-	bodyGyro.Parent = root
+local gui = Instance.new("ScreenGui",guiParent)
 
-	humanoid.PlatformStand = true
+--------------------------------------------------
+-- ROT GRÜN ANIMATION
+--------------------------------------------------
 
-	connection = runService.RenderStepped:Connect(function()
-		if flying then
-			local moveDir = humanoid.MoveDirection
-			if moveDir.Magnitude > 0 then
-				local worldMove = camera.CFrame:VectorToWorldSpace(moveDir)
-				bodyVelocity.Velocity = worldMove.Unit * speed
-			else
-				bodyVelocity.Velocity = Vector3.new(0,0,0)
-			end
-			bodyGyro.CFrame = camera.CFrame
+local function animateStroke(stroke)
+
+	task.spawn(function()
+
+		while stroke.Parent do
+
+			TweenService:Create(stroke,TweenInfo.new(0.7),{
+				Color = Color3.fromRGB(255,0,0)
+			}):Play()
+
+			task.wait(0.7)
+
+			TweenService:Create(stroke,TweenInfo.new(0.7),{
+				Color = Color3.fromRGB(0,255,0)
+			}):Play()
+
+			task.wait(0.7)
+
 		end
+
 	end)
+
 end
 
-local function stopFlying()
-	if connection then connection:Disconnect() end
-	if bodyVelocity then bodyVelocity:Destroy() end
-	if bodyGyro then bodyGyro:Destroy() end
-	humanoid.PlatformStand = false
+local function style(obj,radius)
+
+	local corner = Instance.new("UICorner",obj)
+	corner.CornerRadius = UDim.new(0,radius)
+
+	local stroke = Instance.new("UIStroke",obj)
+	stroke.Thickness = 2
+
+	animateStroke(stroke)
+
 end
 
-flyButton.MouseButton1Click:Connect(function()
-	flying = not flying
-	if flying then
-		flyButton.Text = "FLY ON"
-		startFlying()
+--------------------------------------------------
+-- DRAG SYSTEM
+--------------------------------------------------
+
+local function dragify(frame)
+
+	local dragging
+	local dragInput
+	local start
+	local startPos
+
+	frame.InputBegan:Connect(function(input)
+
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			dragging = true
+			start = input.Position
+			startPos = frame.Position
+		end
+
+	end)
+
+	frame.InputEnded:Connect(function(input)
+
+		if input.UserInputType == Enum.UserInputType.MouseButton1 then
+			dragging = false
+		end
+
+	end)
+
+	frame.InputChanged:Connect(function(input)
+
+		if input.UserInputType == Enum.UserInputType.MouseMovement then
+			dragInput = input
+		end
+
+	end)
+
+	UIS.InputChanged:Connect(function(input)
+
+		if input == dragInput and dragging then
+
+			local delta = input.Position - start
+
+			frame.Position = UDim2.new(
+				startPos.X.Scale,
+				startPos.X.Offset + delta.X,
+				startPos.Y.Scale,
+				startPos.Y.Offset + delta.Y
+			)
+
+		end
+
+	end)
+
+end
+
+--------------------------------------------------
+-- OPEN BUTTON
+--------------------------------------------------
+
+local open = Instance.new("TextButton",gui)
+open.Size = UDim2.new(0,60,0,60)
+open.Position = UDim2.new(0.5,-30,0.8,0)
+open.Text = "CH"
+open.BackgroundColor3 = Color3.fromRGB(30,30,30)
+open.TextColor3 = Color3.new(1,1,1)
+open.TextScaled = true
+
+style(open,100)
+dragify(open)
+
+--------------------------------------------------
+-- MAIN FRAME
+--------------------------------------------------
+
+local main = Instance.new("Frame",gui)
+main.Size = UDim2.new(0,420,0,260)
+main.Position = UDim2.new(0.5,-210,0.5,-130)
+main.BackgroundColor3 = Color3.fromRGB(25,25,25)
+main.Visible = false
+
+style(main,10)
+dragify(main)
+
+--------------------------------------------------
+-- TITLE
+--------------------------------------------------
+
+local title = Instance.new("TextLabel",main)
+title.Size = UDim2.new(1,0,0,40)
+title.BackgroundTransparency = 1
+title.Text = "Centry Hub"
+title.Font = Enum.Font.GothamBold
+title.TextScaled = true
+title.TextColor3 = Color3.new(1,1,1)
+
+--------------------------------------------------
+-- CLOSE
+--------------------------------------------------
+
+local close = Instance.new("TextButton",main)
+close.Size = UDim2.new(0,35,0,35)
+close.Position = UDim2.new(1,-40,0,5)
+close.Text = "X"
+close.BackgroundColor3 = Color3.fromRGB(60,0,0)
+
+style(close,8)
+
+--------------------------------------------------
+-- SPEED BUTTON
+--------------------------------------------------
+
+local speedBtn = Instance.new("TextButton",main)
+speedBtn.Size = UDim2.new(0,160,0,40)
+speedBtn.Position = UDim2.new(0,20,0,60)
+speedBtn.Text = "Speed GUI"
+
+style(speedBtn,8)
+
+--------------------------------------------------
+-- HIGHLIGHT BUTTON
+--------------------------------------------------
+
+local highlightBtn = Instance.new("TextButton",main)
+highlightBtn.Size = UDim2.new(0,160,0,40)
+highlightBtn.Position = UDim2.new(0,20,0,110)
+highlightBtn.Text = "Player Highlight"
+
+style(highlightBtn,8)
+
+--------------------------------------------------
+-- FLY BUTTON
+--------------------------------------------------
+
+local flyBtnMenu = Instance.new("TextButton",main)
+flyBtnMenu.Size = UDim2.new(0,160,0,40)
+flyBtnMenu.Position = UDim2.new(0,20,0,160)
+flyBtnMenu.Text = "Fly GUI"
+
+style(flyBtnMenu,8)
+
+--------------------------------------------------
+-- SPEED FRAME
+--------------------------------------------------
+
+local speedFrame = Instance.new("Frame",gui)
+speedFrame.Size = UDim2.new(0,260,0,180)
+speedFrame.Position = UDim2.new(0.5,-130,0.5,-90)
+speedFrame.BackgroundColor3 = Color3.fromRGB(30,30,30)
+speedFrame.Visible = false
+
+style(speedFrame,10)
+dragify(speedFrame)
+
+local speedBox = Instance.new("TextBox",speedFrame)
+speedBox.Size = UDim2.new(0,120,0,40)
+speedBox.Position = UDim2.new(0.5,-60,0,40)
+speedBox.PlaceholderText = "20 - 50"
+
+style(speedBox,8)
+
+local activateSpeed = Instance.new("TextButton",speedFrame)
+activateSpeed.Size = UDim2.new(0,140,0,40)
+activateSpeed.Position = UDim2.new(0.5,-70,0,90)
+activateSpeed.Text = "Activate Speed"
+
+style(activateSpeed,8)
+
+local status = Instance.new("TextLabel",speedFrame)
+status.Size = UDim2.new(0,140,0,30)
+status.Position = UDim2.new(0.5,-70,0,135)
+status.BackgroundTransparency = 1
+status.Text = "Status: OFF"
+status.TextColor3 = Color3.fromRGB(255,0,0)
+
+--------------------------------------------------
+-- SPEED SYSTEM
+--------------------------------------------------
+
+local speedEnabled = false
+
+activateSpeed.MouseButton1Click:Connect(function()
+
+	local s = tonumber(speedBox.Text)
+
+	if speedEnabled then
+		player.Character.Humanoid.WalkSpeed = 16
+		speedEnabled = false
+		status.Text = "Status: OFF"
+		status.TextColor3 = Color3.fromRGB(255,0,0)
+
 	else
-		flyButton.Text = "FLY OFF"
-		stopFlying()
+
+		if s and s>=20 and s<=50 then
+			player.Character.Humanoid.WalkSpeed = s
+			speedEnabled = true
+			status.Text = "Status: ON"
+			status.TextColor3 = Color3.fromRGB(0,255,0)
+		end
+
 	end
+
 end)
 
-jumpButton.MouseButton1Click:Connect(function()
-	highJump = not highJump
-	if highJump then
-		jumpButton.Text = "HIGH JUMP ON"
-		humanoid.JumpPower = normalJumpPower * 2
+--------------------------------------------------
+-- PLAYER HIGHLIGHT
+--------------------------------------------------
+
+local highlightEnabled=false
+local highlights={}
+
+local function toggleHighlight()
+
+	highlightEnabled=not highlightEnabled
+
+	if highlightEnabled then
+
+		for _,plr in pairs(Players:GetPlayers()) do
+
+			if plr.Character then
+
+				local h=Instance.new("Highlight")
+				h.Parent=plr.Character
+				h.FillTransparency=0.5
+				h.OutlineColor=Color3.fromRGB(255,0,0)
+
+				highlights[plr]=h
+
+			end
+
+		end
+
 	else
-		jumpButton.Text = "HIGH JUMP OFF"
-		humanoid.JumpPower = normalJumpPower
+
+		for _,h in pairs(highlights) do
+			if h then h:Destroy() end
+		end
+
+		highlights={}
+
 	end
+
+end
+
+highlightBtn.MouseButton1Click:Connect(toggleHighlight)
+
+--------------------------------------------------
+-- FLY GUI
+--------------------------------------------------
+
+local flyFrame = Instance.new("Frame",gui)
+flyFrame.Size = UDim2.new(0,200,0,260)
+flyFrame.Position = UDim2.new(0,20,0.5,-130)
+flyFrame.BackgroundColor3 = Color3.fromRGB(30,30,30)
+flyFrame.Visible=false
+
+style(flyFrame,10)
+dragify(flyFrame)
+
+local function makeButton(name,y)
+
+	local b=Instance.new("TextButton",flyFrame)
+	b.Size=UDim2.new(1,-20,0,35)
+	b.Position=UDim2.new(0,10,0,y)
+	b.Text=name
+	b.BackgroundColor3=Color3.fromRGB(40,40,40)
+
+	style(b,6)
+
+	return b
+end
+
+local fly=makeButton("Fly",40)
+local unfly=makeButton("Unfly",80)
+local spUp=makeButton("Speed +",130)
+local spDown=makeButton("Speed -",170)
+
+--------------------------------------------------
+-- FLY SYSTEM
+--------------------------------------------------
+
+local char = player.Character or player.CharacterAdded:Wait()
+local hrp = char:WaitForChild("HumanoidRootPart")
+
+local flying=false
+local speed=50
+
+local bg, bv
+
+local function startFly()
+
+	if flying then return end
+	flying=true
+
+	bg=Instance.new("BodyGyro",hrp)
+	bg.MaxTorque=Vector3.new(9e9,9e9,9e9)
+
+	bv=Instance.new("BodyVelocity",hrp)
+	bv.MaxForce=Vector3.new(9e9,9e9,9e9)
+
+end
+
+local function stopFly()
+
+	flying=false
+	if bg then bg:Destroy() end
+	if bv then bv:Destroy() end
+
+end
+
+RunService.RenderStepped:Connect(function()
+
+	if flying and bv and bg then
+
+		local cam=workspace.CurrentCamera
+		bv.Velocity=cam.CFrame.LookVector*speed
+		bg.CFrame=cam.CFrame
+
+	end
+
+end)
+
+fly.MouseButton1Click:Connect(startFly)
+unfly.MouseButton1Click:Connect(stopFly)
+
+spUp.MouseButton1Click:Connect(function()
+	speed+=10
+end)
+
+spDown.MouseButton1Click:Connect(function()
+	speed=math.max(10,speed-10)
+end)
+
+--------------------------------------------------
+-- BUTTON ACTIONS
+--------------------------------------------------
+
+open.MouseButton1Click:Connect(function()
+	main.Visible=true
+end)
+
+close.MouseButton1Click:Connect(function()
+	main.Visible=false
+end)
+
+speedBtn.MouseButton1Click:Connect(function()
+	speedFrame.Visible=true
+end)
+
+flyBtnMenu.MouseButton1Click:Connect(function()
+	flyFrame.Visible=not flyFrame.Visible
 end)
