@@ -1,0 +1,1151 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local GuiService = game:GetService("CoreGui")
+local HttpService = game:GetService("HttpService")
+local TweenService = game:GetService("TweenService")
+local LP = Players.LocalPlayer
+
+-- Clean up a previous run of this script (stops old keybinds/spin/GUI)
+local env = (getgenv and getgenv()) or _G
+if env.CentryConfuserCleanup then
+	pcall(env.CentryConfuserCleanup)
+	env.CentryConfuserCleanup = nil
+end
+local connections = {}
+local function track(c)
+	table.insert(connections, c)
+	return c
+end
+
+local CONFIG_FILE = "Centry_HUB_CONFUSER_Config.json"
+local HEAD_TEXT = ".gg/KdamAesdX2"
+local BG_ID = "rbxassetid://6675147486"
+
+local COLORS = {
+	bg          = Color3.fromRGB(14, 4, 6),
+	bgTop       = Color3.fromRGB(58, 8, 14),
+	bgBottom    = Color3.fromRGB(10, 3, 5),
+	panel       = Color3.fromRGB(32, 8, 12),
+	text        = Color3.fromRGB(255, 255, 255),
+	textDim     = Color3.fromRGB(255, 205, 210),
+	accent      = Color3.fromRGB(255, 40, 55),
+	accentDark  = Color3.fromRGB(150, 12, 25),
+	white       = Color3.fromRGB(255, 255, 255),
+	toggleOn    = Color3.fromRGB(255, 40, 55),
+	toggleOff   = Color3.fromRGB(70, 22, 28),
+}
+
+local State = {
+	confuserOn = false,
+	speed      = 50,
+	lockGui    = false,
+	activeOnSteal = false,
+	guiScale   = 1,
+	guiPos     = {XScale = 0.5, XOffset = -165, YScale = 0.5, YOffset = -152},
+	bgOpacity  = 0.6,
+	infJump    = false,
+	noAnim     = false,
+	antiDie    = false}
+
+local toggleKey = Enum.KeyCode.X
+local hideKey = Enum.KeyCode.RightShift
+
+local function saveConfig()
+	local cfg = {
+		toggleKey = toggleKey.Name,
+		hideKey   = hideKey.Name,
+		speed     = State.speed,
+		lockGui   = State.lockGui,
+		activeOnSteal = State.activeOnSteal,
+		guiScale  = State.guiScale,
+		guiPos    = State.guiPos,
+		bgOpacity = State.bgOpacity,
+		infJump   = State.infJump,
+		noAnim    = State.noAnim,
+		antiDie   = State.antiDie}
+	pcall(function()
+		if writefile then
+			writefile(CONFIG_FILE, HttpService:JSONEncode(cfg))
+		end
+	end)
+end
+
+local function loadConfig()
+	local hasFile = false
+	pcall(function() hasFile = isfile(CONFIG_FILE) end)
+	if not hasFile then return end
+	local ok, cfg = pcall(function()
+		return HttpService:JSONDecode(readfile(CONFIG_FILE))
+	end)
+	if not ok or not cfg then return end
+	if cfg.toggleKey and Enum.KeyCode[cfg.toggleKey] then
+		toggleKey = Enum.KeyCode[cfg.toggleKey]
+	end
+	if cfg.hideKey and Enum.KeyCode[cfg.hideKey] then
+		hideKey = Enum.KeyCode[cfg.hideKey]
+	end
+	if cfg.speed then State.speed = math.max(0, tonumber(cfg.speed) or 50) end
+	if cfg.lockGui ~= nil then State.lockGui = cfg.lockGui == true end
+	if cfg.activeOnSteal ~= nil then State.activeOnSteal = cfg.activeOnSteal == true end
+	if cfg.guiScale then State.guiScale = math.clamp(tonumber(cfg.guiScale) or 1, 0.70, 1.40) end
+	if cfg.guiPos and type(cfg.guiPos) == "table" then
+		State.guiPos = cfg.guiPos
+	end
+	if cfg.bgOpacity then
+		State.bgOpacity = math.clamp(tonumber(cfg.bgOpacity) or 0.6, 0.1, 1)
+	end
+	if cfg.infJump ~= nil then State.infJump = cfg.infJump == true end
+	if cfg.noAnim ~= nil then State.noAnim = cfg.noAnim == true end
+	if cfg.antiDie ~= nil then State.antiDie = cfg.antiDie == true end
+end
+loadConfig()
+
+----------------------------------------------------------------------
+-- Spin
+----------------------------------------------------------------------
+local Spin = {
+	enabled = false,
+	conn    = nil,
+	angle   = 0}
+
+local function startSpin()
+	if Spin.conn then return end
+	Spin.angle = 0
+
+	Spin.conn = RunService.Heartbeat:Connect(function(dt)
+		if not Spin.enabled then return end
+		local char = LP.Character
+		if not char then return end
+		local root = char:FindFirstChild("HumanoidRootPart")
+		if not root then return end
+
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		if hum then
+			pcall(function() hum.AutoRotate = false end)
+		end
+
+		local step = State.speed * dt * 60
+		Spin.angle = (Spin.angle + step) % 360
+		local yaw = math.rad(Spin.angle)
+
+		local pos = root.Position
+		root.CFrame = CFrame.new(pos) * CFrame.Angles(0, yaw, 0)
+		root.AssemblyAngularVelocity = Vector3.zero
+	end)
+end
+
+local function stopSpin()
+	if Spin.conn then
+		Spin.conn:Disconnect()
+		Spin.conn = nil
+	end
+	local char = LP.Character
+	if char then
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		if hum then
+			pcall(function() hum.AutoRotate = true end)
+		end
+		local root = char:FindFirstChild("HumanoidRootPart")
+		if root then
+			pcall(function() root.AssemblyAngularVelocity = Vector3.zero end)
+		end
+	end
+end
+
+----------------------------------------------------------------------
+-- Anti Die
+----------------------------------------------------------------------
+local antiDieEnabled = false
+local antiDieCharConns = {}
+local antiDieCharAddedConn = nil
+local antiDieHeartbeat = nil
+
+local function clearCharEntry(char, restore)
+	local entry = antiDieCharConns[char]
+	if entry then
+		if entry.healthConn then pcall(function() entry.healthConn:Disconnect() end) end
+		if entry.diedConn then pcall(function() entry.diedConn:Disconnect() end) end
+		if entry.cleanupConn then pcall(function() entry.cleanupConn:Disconnect() end) end
+		antiDieCharConns[char] = nil
+	end
+	if restore and char and char.Parent then
+		pcall(function()
+			local hum = char:FindFirstChildOfClass("Humanoid")
+			if hum then
+				hum.BreakJointsOnDeath = true
+				hum:SetStateEnabled(Enum.HumanoidStateType.Dead, true)
+			end
+		end)
+	end
+end
+
+local function applyAntiDieToCharacter(char)
+	if not char or not char.Parent then return end
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	if not hum then return end
+
+	clearCharEntry(char, false)
+
+	hum.BreakJointsOnDeath = false
+	hum:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+
+	local entry = { humanoid = hum }
+	entry.healthConn = hum:GetPropertyChangedSignal("Health"):Connect(function()
+		if antiDieEnabled and antiDieCharConns[char] == entry and hum.Health <= 0 then
+			hum.Health = hum.MaxHealth
+		end
+	end)
+	entry.diedConn = hum.Died:Connect(function()
+		task.defer(function()
+			if antiDieEnabled and antiDieCharConns[char] == entry and hum and hum.Parent then
+				hum.BreakJointsOnDeath = false
+				hum:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+				hum.Health = hum.MaxHealth
+			end
+		end)
+	end)
+	entry.cleanupConn = char.AncestryChanged:Connect(function()
+		if not char.Parent then clearCharEntry(char, false) end
+	end)
+	antiDieCharConns[char] = entry
+end
+
+local function setAntiDieEnabled(enabled)
+	enabled = enabled == true
+	if enabled == antiDieEnabled then return end
+	antiDieEnabled = enabled
+	if enabled then
+		if not antiDieCharAddedConn then
+			antiDieCharAddedConn = LP.CharacterAdded:Connect(function(char)
+				task.wait(0.2)
+				if antiDieEnabled and char and char.Parent then
+					applyAntiDieToCharacter(char)
+				end
+			end)
+		end
+		local char = LP.Character
+		if char and char.Parent and not antiDieCharConns[char] then
+			applyAntiDieToCharacter(char)
+		end
+		if not antiDieHeartbeat then
+			antiDieHeartbeat = RunService.Heartbeat:Connect(function()
+				if not antiDieEnabled then return end
+				local c = LP.Character
+				local hum = c and c.Parent and c:FindFirstChildOfClass("Humanoid")
+				if not hum then return end
+				local entry = antiDieCharConns[c]
+				if not entry or entry.humanoid ~= hum then applyAntiDieToCharacter(c) end
+				if hum.BreakJointsOnDeath then hum.BreakJointsOnDeath = false end
+				if hum:GetStateEnabled(Enum.HumanoidStateType.Dead) then
+					hum:SetStateEnabled(Enum.HumanoidStateType.Dead, false)
+				end
+				if hum.Health <= 0 then hum.Health = hum.MaxHealth end
+			end)
+		end
+	else
+		if antiDieHeartbeat then antiDieHeartbeat:Disconnect(); antiDieHeartbeat = nil end
+		for char in pairs(antiDieCharConns) do
+			clearCharEntry(char, true)
+		end
+	end
+end
+
+local function setConfuser(on)
+	Spin.enabled = on
+	setAntiDieEnabled(on or State.antiDie)
+	if on then startSpin() else stopSpin() end
+end
+
+----------------------------------------------------------------------
+-- Infinite Jump / No Animation
+----------------------------------------------------------------------
+local function applyNoAnim()
+	local char = LP.Character
+	if not char then return end
+	local animate = char:FindFirstChild("Animate")
+	if animate and animate.Disabled ~= State.noAnim then
+		pcall(function() animate.Disabled = State.noAnim end)
+	end
+	if State.noAnim then
+		local hum = char:FindFirstChildOfClass("Humanoid")
+		local animator = hum and hum:FindFirstChildOfClass("Animator")
+		if animator then
+			for _, t in ipairs(animator:GetPlayingAnimationTracks()) do
+				pcall(function() t:Stop(0) end)
+			end
+		end
+	end
+end
+
+track(RunService.Heartbeat:Connect(function()
+	if State.noAnim then applyNoAnim() end
+end))
+track(LP.CharacterAdded:Connect(function()
+	task.wait(0.5)
+	applyNoAnim()
+end))
+
+local lastAirJump = 0
+track(UserInputService.JumpRequest:Connect(function()
+	if not State.infJump then return end
+	local char = LP.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	local root = char and char:FindFirstChild("HumanoidRootPart")
+	if not hum or not root or hum.Health <= 0 then return end
+	-- on the ground the normal jump works; only help while in the air
+	local st = hum:GetState()
+	if st ~= Enum.HumanoidStateType.Freefall and st ~= Enum.HumanoidStateType.Jumping then return end
+	local now = os.clock()
+	if now - lastAirJump < 0.2 then return end
+	lastAirJump = now
+	local power = hum.UseJumpPower and hum.JumpPower or math.sqrt(2 * workspace.Gravity * hum.JumpHeight)
+	local v = root.AssemblyLinearVelocity
+	root.AssemblyLinearVelocity = Vector3.new(v.X, power, v.Z)
+end))
+
+----------------------------------------------------------------------
+-- GUI
+----------------------------------------------------------------------
+for _, name in pairs({"BakiBypass", "BakiwareConfuser", "BakiAntiDie", "VynxConfuser", "LORD_HUB_CONFUSER"}) do
+	local old = GuiService:FindFirstChild(name)
+	if old then old:Destroy() end
+	local pg = LP:FindFirstChild("PlayerGui")
+	if pg then
+		local o = pg:FindFirstChild(name)
+		if o then o:Destroy() end
+	end
+end
+
+-- forward declarations (assigned in the logic section)
+local updateUI, toggleConfuser, endSteal
+
+local WIN_W, FULL_H, TOP_H = 330, 304, 40
+
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "LORD_HUB_CONFUSER"
+screenGui.Parent = GuiService
+screenGui.ResetOnSpawn = false
+screenGui.IgnoreGuiInset = true
+
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, WIN_W, 0, FULL_H)
+mainFrame.Position = UDim2.new(State.guiPos.XScale, State.guiPos.XOffset, State.guiPos.YScale, State.guiPos.YOffset)
+mainFrame.BackgroundColor3 = COLORS.white
+mainFrame.BackgroundTransparency = 0
+mainFrame.ClipsDescendants = true
+mainFrame.Parent = screenGui
+
+local guiScaleObject = Instance.new("UIScale")
+guiScaleObject.Name = "LORDHUBGuiScale"
+guiScaleObject.Scale = math.clamp(tonumber(State.guiScale) or 1, 0.70, 1.40)
+guiScaleObject.Parent = mainFrame
+Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 14)
+
+local bgGradient = Instance.new("UIGradient")
+bgGradient.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, COLORS.bgTop),
+	ColorSequenceKeypoint.new(1, COLORS.bgBottom)})
+bgGradient.Rotation = 90
+bgGradient.Parent = mainFrame
+
+-- Fixed background image
+local bgImage = Instance.new("ImageLabel")
+bgImage.Name = "BackgroundImage"
+bgImage.Size = UDim2.new(1, 0, 1, 0)
+bgImage.BackgroundTransparency = 1
+bgImage.ScaleType = Enum.ScaleType.Crop
+bgImage.Image = BG_ID
+bgImage.ImageTransparency = 1 - State.bgOpacity
+bgImage.ZIndex = 1
+bgImage.Parent = mainFrame
+Instance.new("UICorner", bgImage).CornerRadius = UDim.new(0, 14)
+
+-- Animated border: red -> white -> red
+local borderStroke = Instance.new("UIStroke")
+borderStroke.Thickness = 2
+borderStroke.Color = COLORS.white
+borderStroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+borderStroke.Parent = mainFrame
+
+local borderGradient = Instance.new("UIGradient")
+borderGradient.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 20, 40)),
+	ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 255, 255)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 20, 40))})
+borderGradient.Parent = borderStroke
+TweenService:Create(borderGradient, TweenInfo.new(2.5, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, -1), {Rotation = 360}):Play()
+
+-- Falling particles
+local starContainer = Instance.new("Frame")
+starContainer.Size = UDim2.new(1, 0, 1, 0)
+starContainer.BackgroundTransparency = 1
+starContainer.ClipsDescendants = true
+starContainer.ZIndex = 2
+starContainer.Parent = mainFrame
+
+local function createStar()
+	local star = Instance.new("Frame")
+	star.BackgroundColor3 = (math.random() > 0.5) and COLORS.white or COLORS.accent
+	star.BorderSizePixel = 0
+	star.ZIndex = 2
+	local size = math.random(1, 3)
+	star.Size = UDim2.new(0, size, 0, size)
+	Instance.new("UICorner", star).CornerRadius = UDim.new(1, 0)
+	star.Position = UDim2.new(math.random(), 0, -0.1, 0)
+	star.BackgroundTransparency = math.random(3, 7) / 10
+	star.Parent = starContainer
+	local tween = TweenService:Create(star, TweenInfo.new(math.random(4, 7), Enum.EasingStyle.Linear), {
+		Position = UDim2.new(star.Position.X.Scale, 0, 1.1, 0)})
+	tween:Play()
+	tween.Completed:Connect(function() star:Destroy() end)
+end
+
+task.spawn(function()
+	while mainFrame and mainFrame.Parent do
+		createStar()
+		task.wait(0.6)
+	end
+end)
+
+-- Top bar
+local topBar = Instance.new("Frame")
+topBar.Size = UDim2.new(1, 0, 0, TOP_H)
+topBar.BackgroundTransparency = 1
+topBar.BorderSizePixel = 0
+topBar.ZIndex = 3
+topBar.Parent = mainFrame
+
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Name = "LORDHUBTitle"
+titleLabel.Size = UDim2.new(1, -90, 1, 0)
+titleLabel.Position = UDim2.new(0, 14, 0, 0)
+titleLabel.BackgroundTransparency = 1
+titleLabel.Text = "CENTRY CONFUSER"
+titleLabel.TextColor3 = COLORS.white
+titleLabel.Font = Enum.Font.GothamBlack
+titleLabel.TextSize = 16
+titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+titleLabel.ZIndex = 4
+titleLabel.Parent = topBar
+
+local titleGradient = Instance.new("UIGradient")
+titleGradient.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 255, 255)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 70, 85))})
+titleGradient.Parent = titleLabel
+
+local divider = Instance.new("Frame")
+divider.Size = UDim2.new(0.94, 0, 0, 2)
+divider.Position = UDim2.new(0.03, 0, 0, TOP_H - 2)
+divider.BackgroundColor3 = COLORS.white
+divider.BorderSizePixel = 0
+divider.ZIndex = 3
+divider.Parent = mainFrame
+local dividerGradient = Instance.new("UIGradient")
+dividerGradient.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 20, 40)),
+	ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 255, 255)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 20, 40))})
+dividerGradient.Parent = divider
+
+local function makeTopButton(name, text, xOffset)
+	local b = Instance.new("TextButton")
+	b.Name = name
+	b.Size = UDim2.new(0, 26, 0, 24)
+	b.AnchorPoint = Vector2.new(1, 0.5)
+	b.Position = UDim2.new(1, xOffset, 0.5, -1)
+	b.BackgroundColor3 = COLORS.accentDark
+	b.BackgroundTransparency = 0.3
+	b.BorderSizePixel = 0
+	b.Text = text
+	b.TextColor3 = COLORS.white
+	b.Font = Enum.Font.GothamBold
+	b.TextSize = 14
+	b.AutoButtonColor = true
+	b.ZIndex = 4
+	b.Parent = topBar
+	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 7)
+	return b
+end
+
+local closeBtn = makeTopButton("CloseButton", "X", -10)
+local minimizeBtn = makeTopButton("MinimizeButton", "-", -42)
+
+-- Body (everything below the top bar)
+local body = Instance.new("Frame")
+body.Size = UDim2.new(1, 0, 1, -TOP_H)
+body.Position = UDim2.new(0, 0, 0, TOP_H)
+body.BackgroundTransparency = 1
+body.ZIndex = 3
+body.Parent = mainFrame
+
+local isCollapsed = false
+minimizeBtn.MouseButton1Click:Connect(function()
+	isCollapsed = not isCollapsed
+	body.Visible = not isCollapsed
+	divider.Visible = not isCollapsed
+	mainFrame.Size = isCollapsed and UDim2.new(0, WIN_W, 0, TOP_H) or UDim2.new(0, WIN_W, 0, FULL_H)
+	minimizeBtn.Text = isCollapsed and "+" or "-"
+end)
+
+closeBtn.MouseButton1Click:Connect(function()
+	screenGui.Enabled = false -- press the Hide GUI key to show it again
+end)
+
+----------------------------------------------------------------------
+-- Helpers
+----------------------------------------------------------------------
+local function stylePanel(frame, radius)
+	frame.BackgroundColor3 = COLORS.panel
+	frame.BackgroundTransparency = 0.25
+	Instance.new("UICorner", frame).CornerRadius = UDim.new(0, radius or 8)
+	local st = Instance.new("UIStroke")
+	st.Color = COLORS.accent
+	st.Thickness = 1
+	st.Transparency = 0.2
+	st.Parent = frame
+	return st
+end
+
+local function makeText(parent, text, pos, size, textSize, align, color)
+	local l = Instance.new("TextLabel")
+	l.Size = size
+	l.Position = pos
+	l.BackgroundTransparency = 1
+	l.Text = text
+	l.TextColor3 = color or COLORS.white
+	l.Font = Enum.Font.GothamBold
+	l.TextSize = textSize or 10
+	l.TextXAlignment = align or Enum.TextXAlignment.Left
+	l.ZIndex = 6
+	l.Parent = parent
+	return l
+end
+
+local function makeBtn(parent, text, pos, size)
+	local b = Instance.new("TextButton")
+	b.Size = size
+	b.Position = pos
+	b.BackgroundColor3 = COLORS.accentDark
+	b.BackgroundTransparency = 0.15
+	b.BorderSizePixel = 0
+	b.Text = text
+	b.TextColor3 = COLORS.white
+	b.Font = Enum.Font.GothamBold
+	b.TextSize = 10
+	b.AutoButtonColor = true
+	b.ZIndex = 6
+	b.Parent = parent
+	Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+	return b
+end
+
+-- Tile buttons (grid style)
+local function makeTile(parent, text)
+	local t = Instance.new("TextButton")
+	t.BackgroundColor3 = COLORS.panel
+	t.BackgroundTransparency = 0.15
+	t.BorderSizePixel = 0
+	t.AutoButtonColor = false
+	t.Text = text
+	t.TextColor3 = COLORS.white
+	t.Font = Enum.Font.GothamBlack
+	t.TextSize = 12
+	t.TextWrapped = true
+	t.ZIndex = 5
+	t.Parent = parent
+	Instance.new("UICorner", t).CornerRadius = UDim.new(0, 12)
+	local st = Instance.new("UIStroke")
+	st.Color = COLORS.accent
+	st.Thickness = 1.5
+	st.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+	st.Parent = t
+	return t
+end
+
+local function setTileOn(tile, on)
+	TweenService:Create(tile, TweenInfo.new(0.15), {
+		BackgroundColor3 = on and COLORS.accent or COLORS.panel,
+		BackgroundTransparency = on and 0 or 0.15}):Play()
+	local st = tile:FindFirstChildOfClass("UIStroke")
+	if st then st.Color = on and COLORS.white or COLORS.accent end
+end
+
+local function makeToggleTile(parent, label, key, onChange)
+	local t = makeTile(parent, label)
+	local function render() setTileOn(t, State[key]) end
+	render()
+	t.MouseButton1Click:Connect(function()
+		State[key] = not State[key]
+		render()
+		if onChange then onChange() end
+		saveConfig()
+	end)
+	return t
+end
+
+-- Pill toggle (row style)
+local function makePill(row, key, onChange)
+	local pill = Instance.new("TextButton")
+	pill.Size = UDim2.new(0, 46, 0, 20)
+	pill.Position = UDim2.new(1, -54, 0.5, -10)
+	pill.BorderSizePixel = 0
+	pill.Text = ""
+	pill.AutoButtonColor = false
+	pill.ZIndex = 6
+	pill.Parent = row
+	Instance.new("UICorner", pill).CornerRadius = UDim.new(1, 0)
+	local knob = Instance.new("Frame")
+	knob.Size = UDim2.new(0, 16, 0, 16)
+	knob.BackgroundColor3 = COLORS.white
+	knob.BorderSizePixel = 0
+	knob.ZIndex = 7
+	knob.Parent = pill
+	Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
+	local function render()
+		local on = State[key]
+		TweenService:Create(pill, TweenInfo.new(0.15), {
+			BackgroundColor3 = on and COLORS.toggleOn or COLORS.toggleOff}):Play()
+		TweenService:Create(knob, TweenInfo.new(0.15), {
+			Position = on and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8)}):Play()
+	end
+	render()
+	pill.MouseButton1Click:Connect(function()
+		State[key] = not State[key]
+		render()
+		if onChange then onChange() end
+		saveConfig()
+	end)
+end
+
+----------------------------------------------------------------------
+-- Layout: sidebar tabs (left) + pages (right) + footer text
+----------------------------------------------------------------------
+local sidebar = Instance.new("Frame")
+sidebar.Size = UDim2.new(0, 78, 0, 226)
+sidebar.Position = UDim2.new(0, 10, 0, 8)
+sidebar.BackgroundTransparency = 1
+sidebar.ZIndex = 4
+sidebar.Parent = body
+
+local sideLayout = Instance.new("UIListLayout")
+sideLayout.Padding = UDim.new(0, 6)
+sideLayout.SortOrder = Enum.SortOrder.LayoutOrder
+sideLayout.Parent = sidebar
+
+local pageHolder = Instance.new("Frame")
+pageHolder.Size = UDim2.new(0, 224, 0, 226)
+pageHolder.Position = UDim2.new(0, 96, 0, 8)
+pageHolder.BackgroundTransparency = 1
+pageHolder.ClipsDescendants = true
+pageHolder.ZIndex = 4
+pageHolder.Parent = body
+
+local pages, tabButtons = {}, {}
+
+local function setTabActive(btn, active)
+	TweenService:Create(btn, TweenInfo.new(0.15), {
+		BackgroundColor3 = active and COLORS.accent or COLORS.panel,
+		BackgroundTransparency = active and 0 or 0.2}):Play()
+	local st = btn:FindFirstChildOfClass("UIStroke")
+	if st then st.Color = active and COLORS.white or COLORS.accent end
+end
+
+local function selectTab(name)
+	for n, pg in pairs(pages) do
+		pg.Visible = (n == name)
+		setTabActive(tabButtons[n], n == name)
+	end
+end
+
+local function makePage(name, order)
+	local btn = Instance.new("TextButton")
+	btn.Name = name .. "Tab"
+	btn.Size = UDim2.new(1, 0, 0, 34)
+	btn.LayoutOrder = order
+	btn.BackgroundColor3 = COLORS.panel
+	btn.BackgroundTransparency = 0.2
+	btn.BorderSizePixel = 0
+	btn.AutoButtonColor = false
+	btn.Text = name
+	btn.TextColor3 = COLORS.white
+	btn.Font = Enum.Font.GothamBlack
+	btn.TextSize = 11
+	btn.ZIndex = 5
+	btn.Parent = sidebar
+	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 10)
+	local st = Instance.new("UIStroke")
+	st.Color = COLORS.accent
+	st.Thickness = 1.5
+	st.Parent = btn
+	tabButtons[name] = btn
+
+	local pg = Instance.new("ScrollingFrame")
+	pg.Name = name .. "Page"
+	pg.Size = UDim2.new(1, 0, 1, 0)
+	pg.BackgroundTransparency = 1
+	pg.BorderSizePixel = 0
+	pg.ScrollBarThickness = 3
+	pg.ScrollBarImageColor3 = COLORS.accent
+	pg.CanvasSize = UDim2.new(0, 0, 0, 0)
+	pg.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	pg.ScrollingDirection = Enum.ScrollingDirection.Y
+	pg.Visible = false
+	pg.ZIndex = 4
+	pg.Parent = pageHolder
+	local pad = Instance.new("UIPadding")
+	pad.PaddingRight = UDim.new(0, 8)
+	pad.PaddingTop = UDim.new(0, 2)
+	pad.PaddingBottom = UDim.new(0, 4)
+	pad.Parent = pg
+	pages[name] = pg
+
+	btn.MouseButton1Click:Connect(function() selectTab(name) end)
+	return pg
+end
+
+local function gridLayout(page)
+	local g = Instance.new("UIGridLayout")
+	g.CellSize = UDim2.new(0.5, -5, 0, 62)
+	g.CellPadding = UDim2.new(0, 8, 0, 8)
+	g.SortOrder = Enum.SortOrder.LayoutOrder
+	g.Parent = page
+end
+
+local function listLayout(page)
+	local l = Instance.new("UIListLayout")
+	l.Padding = UDim.new(0, 6)
+	l.SortOrder = Enum.SortOrder.LayoutOrder
+	l.Parent = page
+end
+
+local function makeRow(page, order)
+	local r = Instance.new("Frame")
+	r.Size = UDim2.new(1, 0, 0, 30)
+	r.LayoutOrder = order
+	r.BorderSizePixel = 0
+	r.ZIndex = 5
+	r.Parent = page
+	stylePanel(r, 8)
+	return r
+end
+
+local function makeHeader(page, text, order)
+	local h = makeText(page, text, UDim2.new(0, 0, 0, 0), UDim2.new(1, 0, 0, 16), 10, Enum.TextXAlignment.Left, COLORS.accent)
+	h.LayoutOrder = order
+	return h
+end
+
+-- Status label under the tabs
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Size = UDim2.new(1, 0, 0, 18)
+statusLabel.LayoutOrder = 10
+statusLabel.BackgroundTransparency = 1
+statusLabel.Text = "● OFF"
+statusLabel.TextColor3 = COLORS.textDim
+statusLabel.Font = Enum.Font.GothamBold
+statusLabel.TextSize = 11
+statusLabel.ZIndex = 5
+statusLabel.Parent = sidebar
+
+-- Footer text (same text as above your head)
+local menuText = Instance.new("TextLabel")
+menuText.Name = "MenuText"
+menuText.Size = UDim2.new(0.92, 0, 0, 24)
+menuText.Position = UDim2.new(0.04, 0, 1, -28)
+menuText.BackgroundTransparency = 1
+menuText.Text = HEAD_TEXT
+menuText.TextColor3 = Color3.fromRGB(255, 255, 255)
+menuText.Font = Enum.Font.GothamBlack
+menuText.TextSize = 22
+menuText.TextScaled = true
+menuText.ZIndex = 4
+menuText.Parent = body
+
+local menuStroke = Instance.new("UIStroke")
+menuStroke.Color = Color3.fromRGB(110, 0, 12)
+menuStroke.Thickness = 1.5
+menuStroke.Parent = menuText
+
+local menuGrad = Instance.new("UIGradient")
+menuGrad.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 30, 50)),
+	ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 255, 255)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 30, 50))})
+menuGrad.Offset = Vector2.new(-1, 0)
+menuGrad.Parent = menuText
+TweenService:Create(menuGrad, TweenInfo.new(1.5, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, -1, true), {Offset = Vector2.new(1, 0)}):Play()
+
+----------------------------------------------------------------------
+-- MAIN tab (tiles)
+----------------------------------------------------------------------
+local mainPage = makePage("MAIN", 1)
+gridLayout(mainPage)
+
+local activateTile = makeTile(mainPage, "ACTIVATE")
+activateTile.LayoutOrder = 1
+activateTile.TextSize = 13
+activateTile.MouseButton1Click:Connect(function() toggleConfuser() end)
+
+local stealTile = makeToggleTile(mainPage, "ACTIVE ON STEAL", "activeOnSteal", function()
+	if not State.activeOnSteal then endSteal() end
+end)
+stealTile.LayoutOrder = 2
+
+local antiDieTile = makeToggleTile(mainPage, "ANTI DIE", "antiDie", function()
+	setAntiDieEnabled(State.antiDie or State.confuserOn)
+end)
+antiDieTile.LayoutOrder = 3
+
+-- Speed tile (label + input)
+local speedTile = Instance.new("Frame")
+speedTile.Name = "SpeedTile"
+speedTile.LayoutOrder = 4
+speedTile.BorderSizePixel = 0
+speedTile.ZIndex = 5
+speedTile.Parent = mainPage
+stylePanel(speedTile, 12)
+makeText(speedTile, "SPEED", UDim2.new(0, 0, 0, 8), UDim2.new(1, 0, 0, 16), 12, Enum.TextXAlignment.Center)
+
+local speedBox = Instance.new("TextBox")
+speedBox.Name = "RadiusValue"
+speedBox.Size = UDim2.new(0.8, 0, 0, 24)
+speedBox.Position = UDim2.new(0.1, 0, 0, 30)
+speedBox.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+speedBox.BackgroundTransparency = 0.5
+speedBox.BorderSizePixel = 0
+speedBox.Text = tostring(State.speed)
+speedBox.TextColor3 = COLORS.white
+speedBox.PlaceholderColor3 = COLORS.textDim
+speedBox.Font = Enum.Font.GothamBold
+speedBox.TextSize = 13
+speedBox.ClearTextOnFocus = false
+speedBox.TextXAlignment = Enum.TextXAlignment.Center
+speedBox.ZIndex = 6
+speedBox.Parent = speedTile
+Instance.new("UICorner", speedBox).CornerRadius = UDim.new(0, 6)
+
+local speedBoxStroke = Instance.new("UIStroke")
+speedBoxStroke.Color = COLORS.white
+speedBoxStroke.Thickness = 1
+speedBoxStroke.Transparency = 1
+speedBoxStroke.Parent = speedBox
+speedBox.Focused:Connect(function()
+	TweenService:Create(speedBoxStroke, TweenInfo.new(0.15), {Transparency = 0}):Play()
+end)
+
+----------------------------------------------------------------------
+-- MOVE tab (tiles)
+----------------------------------------------------------------------
+local movePage = makePage("MOVE", 2)
+gridLayout(movePage)
+
+local jumpTile = makeToggleTile(movePage, "INFINITE JUMP", "infJump")
+jumpTile.LayoutOrder = 1
+local animTile = makeToggleTile(movePage, "NO ANIMATION", "noAnim", applyNoAnim)
+animTile.LayoutOrder = 2
+
+----------------------------------------------------------------------
+-- CONFIG tab (rows)
+----------------------------------------------------------------------
+local configPage = makePage("CONFIG", 3)
+listLayout(configPage)
+
+local listening = nil -- "toggle" | "hide" | nil
+local hintLabel
+
+makeHeader(configPage, "KEYBINDS", 1)
+
+local toggleRow = makeRow(configPage, 2)
+makeText(toggleRow, "Toggle Key", UDim2.new(0, 10, 0, 0), UDim2.new(0.5, 0, 1, 0))
+local toggleKeyBtn = makeBtn(toggleRow, "", UDim2.new(1, -92, 0.5, -11), UDim2.new(0, 84, 0, 22))
+
+local hideRow = makeRow(configPage, 3)
+makeText(hideRow, "Hide GUI Key", UDim2.new(0, 10, 0, 0), UDim2.new(0.5, 0, 1, 0))
+local hideKeyBtn = makeBtn(hideRow, "", UDim2.new(1, -92, 0.5, -11), UDim2.new(0, 84, 0, 22))
+
+local function refreshKeyButtons()
+	toggleKeyBtn.Text = (listening == "toggle") and "PRESS KEY..." or toggleKey.Name
+	hideKeyBtn.Text = (listening == "hide") and "PRESS KEY..." or hideKey.Name
+	if hintLabel then
+		hintLabel.Text = "X hides the GUI. Press " .. hideKey.Name .. " to show it again."
+	end
+end
+
+toggleKeyBtn.MouseButton1Click:Connect(function()
+	listening = (listening == "toggle") and nil or "toggle"
+	refreshKeyButtons()
+end)
+hideKeyBtn.MouseButton1Click:Connect(function()
+	listening = (listening == "hide") and nil or "hide"
+	refreshKeyButtons()
+end)
+
+makeHeader(configPage, "WINDOW", 4)
+
+local lockRow = makeRow(configPage, 5)
+makeText(lockRow, "Lock GUI Position", UDim2.new(0, 10, 0, 0), UDim2.new(0.6, 0, 1, 0))
+makePill(lockRow, "lockGui")
+
+local sizeRow = makeRow(configPage, 6)
+makeText(sizeRow, "GUI Size", UDim2.new(0, 10, 0, 0), UDim2.new(0.4, 0, 1, 0))
+local sizeMinus = makeBtn(sizeRow, "-", UDim2.new(1, -100, 0.5, -11), UDim2.new(0, 26, 0, 22))
+local guiSizeValue = makeText(sizeRow, "100%", UDim2.new(1, -72, 0, 0), UDim2.new(0, 40, 1, 0), 11, Enum.TextXAlignment.Center)
+local sizePlus = makeBtn(sizeRow, "+", UDim2.new(1, -32, 0.5, -11), UDim2.new(0, 26, 0, 22))
+
+local function renderGuiSize()
+	State.guiScale = math.clamp(tonumber(State.guiScale) or 1, 0.70, 1.40)
+	guiScaleObject.Scale = State.guiScale
+	guiSizeValue.Text = tostring(math.floor(State.guiScale * 100 + 0.5)) .. "%"
+end
+sizeMinus.MouseButton1Click:Connect(function()
+	State.guiScale = math.max(0.70, math.floor((State.guiScale - 0.05) * 100 + 0.5) / 100)
+	renderGuiSize()
+	saveConfig()
+end)
+sizePlus.MouseButton1Click:Connect(function()
+	State.guiScale = math.min(1.40, math.floor((State.guiScale + 0.05) * 100 + 0.5) / 100)
+	renderGuiSize()
+	saveConfig()
+end)
+renderGuiSize()
+
+makeHeader(configPage, "BACKGROUND", 7)
+
+local opacityRow = makeRow(configPage, 8)
+makeText(opacityRow, "BG Opacity", UDim2.new(0, 10, 0, 0), UDim2.new(0.4, 0, 1, 0))
+local opMinus = makeBtn(opacityRow, "-", UDim2.new(1, -100, 0.5, -11), UDim2.new(0, 26, 0, 22))
+local opacityValue = makeText(opacityRow, "60%", UDim2.new(1, -72, 0, 0), UDim2.new(0, 40, 1, 0), 11, Enum.TextXAlignment.Center)
+local opPlus = makeBtn(opacityRow, "+", UDim2.new(1, -32, 0.5, -11), UDim2.new(0, 26, 0, 22))
+
+local function applyBackground()
+	bgImage.Image = BG_ID
+	bgImage.ImageTransparency = 1 - State.bgOpacity
+	opacityValue.Text = math.floor(State.bgOpacity * 100 + 0.5) .. "%"
+end
+opMinus.MouseButton1Click:Connect(function()
+	State.bgOpacity = math.max(0.1, math.floor((State.bgOpacity - 0.05) * 100 + 0.5) / 100)
+	applyBackground()
+	saveConfig()
+end)
+opPlus.MouseButton1Click:Connect(function()
+	State.bgOpacity = math.min(1, math.floor((State.bgOpacity + 0.05) * 100 + 0.5) / 100)
+	applyBackground()
+	saveConfig()
+end)
+applyBackground()
+
+hintLabel = makeText(configPage, "", UDim2.new(0, 0, 0, 0), UDim2.new(1, 0, 0, 30), 9, Enum.TextXAlignment.Left, COLORS.textDim)
+hintLabel.LayoutOrder = 9
+hintLabel.TextWrapped = true
+hintLabel.TextYAlignment = Enum.TextYAlignment.Top
+refreshKeyButtons()
+
+selectTab("MAIN")
+
+----------------------------------------------------------------------
+-- Logic
+----------------------------------------------------------------------
+updateUI = function()
+	if State.confuserOn then
+		activateTile.Text = "ON"
+		statusLabel.Text = "● ACTIVE"
+		statusLabel.TextColor3 = COLORS.accent
+	else
+		activateTile.Text = "ACTIVATE"
+		statusLabel.Text = "● OFF"
+		statusLabel.TextColor3 = COLORS.textDim
+	end
+	setTileOn(activateTile, State.confuserOn)
+	local n = tonumber(speedBox.Text) or State.speed
+	n = math.max(0, n)
+	State.speed = n
+end
+
+speedBox.FocusLost:Connect(function()
+	TweenService:Create(speedBoxStroke, TweenInfo.new(0.15), {Transparency = 1}):Play()
+	local n = tonumber(speedBox.Text)
+	if not n then n = State.speed end
+	n = math.max(0, n)
+	State.speed = n
+	speedBox.Text = tostring(n)
+	saveConfig()
+end)
+
+toggleConfuser = function()
+	State.confuserOn = not State.confuserOn
+	setConfuser(State.confuserOn)
+	updateUI()
+	saveConfig()
+end
+
+local stealActive = false
+
+local function isCarryingBrainrot()
+	local char = LP.Character
+	return LP:GetAttribute("Stealing") == true
+		or (char ~= nil and char:GetAttribute("Stealing") == true)
+end
+
+endSteal = function()
+	if not stealActive then return end
+	stealActive = false
+	State.confuserOn = false
+	setConfuser(false)
+	updateUI()
+end
+
+task.spawn(function()
+	while screenGui and screenGui.Parent do
+		task.wait(0.15)
+		if State.activeOnSteal then
+			local carrying = isCarryingBrainrot()
+			if carrying and not stealActive and not State.confuserOn then
+				stealActive = true
+				State.confuserOn = true
+				setConfuser(true)
+				updateUI()
+			elseif not carrying and stealActive then
+				endSteal()
+			end
+		end
+	end
+end)
+
+track(UserInputService.InputBegan:Connect(function(input, gameProcessed)
+	-- Keybind capture from the CONFIG tab
+	if listening then
+		if input.UserInputType == Enum.UserInputType.Keyboard then
+			local k = input.KeyCode
+			if k ~= Enum.KeyCode.Escape and k ~= Enum.KeyCode.Unknown then
+				if listening == "toggle" and k ~= hideKey then
+					toggleKey = k
+					saveConfig()
+				elseif listening == "hide" and k ~= toggleKey then
+					hideKey = k
+					saveConfig()
+				end
+			end
+			listening = nil
+			refreshKeyButtons()
+		end
+		return
+	end
+	if gameProcessed then return end
+	if input.UserInputType == Enum.UserInputType.Keyboard and input.KeyCode == hideKey then
+		screenGui.Enabled = not screenGui.Enabled
+		return
+	end
+	if input.KeyCode == toggleKey and (input.UserInputType == Enum.UserInputType.Keyboard
+		or input.UserInputType == Enum.UserInputType.Gamepad1
+		or input.UserInputType == Enum.UserInputType.Gamepad2) then
+		toggleConfuser()
+	end
+end))
+
+-- Dragging
+local isDragging = false
+local dragInput, mousePos, framePos
+
+mainFrame.InputBegan:Connect(function(input, gameProcessed)
+	if gameProcessed then return end
+	if (input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch) and not State.lockGui then
+		isDragging = true
+		mousePos = input.Position
+		framePos = mainFrame.Position
+		input.Changed:Connect(function()
+			if input.UserInputState == Enum.UserInputState.End then
+				isDragging = false
+				local pos = mainFrame.Position
+				State.guiPos = {XScale = pos.X.Scale, XOffset = pos.X.Offset, YScale = pos.Y.Scale, YOffset = pos.Y.Offset}
+				saveConfig()
+			end
+		end)
+	end
+end)
+
+mainFrame.InputChanged:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+		dragInput = input
+	end
+end)
+
+track(UserInputService.InputChanged:Connect(function(input)
+	if input == dragInput and isDragging then
+		local delta = input.Position - mousePos
+		mainFrame.Position = UDim2.new(framePos.X.Scale, framePos.X.Offset + delta.X, framePos.Y.Scale, framePos.Y.Offset + delta.Y)
+	end
+end))
+
+----------------------------------------------------------------------
+-- Head text (red/white, above your head)
+----------------------------------------------------------------------
+local function buildHeadText(char)
+	local head = char:WaitForChild("Head", 5)
+	if not head then return end
+
+	local old = head:FindFirstChild("CentryHeadText")
+	if old then old:Destroy() end
+
+	local bb = Instance.new("BillboardGui")
+	bb.Name = "CentryHeadText"
+	bb.Adornee = head
+	bb.Size = UDim2.new(0, 280, 0, 60)
+	bb.StudsOffset = Vector3.new(0, 3, 0)
+	bb.AlwaysOnTop = true
+	bb.Parent = head
+
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.new(1, 0, 1, 0)
+	label.BackgroundTransparency = 1
+	label.Text = HEAD_TEXT
+	label.TextColor3 = Color3.fromRGB(255, 255, 255)
+	label.Font = Enum.Font.GothamBlack
+	label.TextScaled = true
+	label.Parent = bb
+
+	local stroke = Instance.new("UIStroke")
+	stroke.Color = Color3.fromRGB(110, 0, 12)
+	stroke.Thickness = 2
+	stroke.Parent = label
+
+	local grad = Instance.new("UIGradient")
+	grad.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 30, 50)),
+		ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 255, 255)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 30, 50))})
+	grad.Offset = Vector2.new(-1, 0)
+	grad.Parent = label
+	TweenService:Create(grad, TweenInfo.new(1.5, Enum.EasingStyle.Linear, Enum.EasingDirection.InOut, -1, true), {Offset = Vector2.new(1, 0)}):Play()
+end
+
+track(LP.CharacterAdded:Connect(buildHeadText))
+if LP.Character then task.spawn(buildHeadText, LP.Character) end
+
+-- Startup state
+applyNoAnim()
+if State.antiDie then setAntiDieEnabled(true) end
+
+env.CentryConfuserCleanup = function()
+	for _, c in ipairs(connections) do
+		pcall(function() c:Disconnect() end)
+	end
+	Spin.enabled = false
+	State.noAnim = false
+	pcall(applyNoAnim)
+	pcall(stopSpin)
+	pcall(setAntiDieEnabled, false)
+	if antiDieCharAddedConn then
+		pcall(function() antiDieCharAddedConn:Disconnect() end)
+	end
+	pcall(function() screenGui:Destroy() end)
+	pcall(function()
+		local ch = LP.Character
+		local head = ch and ch:FindFirstChild("Head")
+		local bb = head and head:FindFirstChild("CentryHeadText")
+		if bb then bb:Destroy() end
+	end)
+end
+
+updateUI()
